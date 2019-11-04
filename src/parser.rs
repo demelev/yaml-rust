@@ -658,6 +658,29 @@ impl<T: Iterator<Item = char>> Parser<T> {
     }
 
     fn flow_mapping_value(&mut self, empty: bool) -> ParseResult {
+        if empty {
+            let Token(mark, _) = *self.peek_token()?;
+            self.state = State::FlowMappingKey;
+            return Ok((Event::empty_scalar(), mark));
+        }
+
+        let token = &*self.peek_token()?;
+        if (token.1 == TokenType::Value) {
+            self.skip();
+            match self.peek_token()?.1 {
+                TokenType::FlowEntry | TokenType::FlowMappingEnd => {}
+                _ => {
+                    self.push_state(State::FlowMappingKey);
+                    return self.parse_node(false, false);
+                }
+            }
+        }
+
+        self.state = State::FlowMappingKey;
+        Ok((Event::empty_scalar(), token.0))
+    }
+
+    fn flow_mapping_value1(&mut self, empty: bool) -> ParseResult {
         let mark: Marker = {
             if empty {
                 let Token(mark, _) = *self.peek_token()?;
