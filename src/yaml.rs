@@ -178,7 +178,48 @@ impl YamlLoader {
                     } else {
                         let mut newkey = Yaml::BadValue;
                         mem::swap(&mut newkey, cur_key);
-                        h.insert(newkey, node.0);
+                        // h.insert(newkey, node.0);
+
+                        if let Yaml::String(ref nk) = newkey {
+                            if (nk == "<<") {
+                                if let Yaml::Hash(hash) = node.0 {
+                                    for (key, val) in hash {
+                                        h.insert(key, val);
+                                    }
+                                }
+                            } else {
+                                match h.get_mut(&newkey) {
+                                    Some(v) => {
+                                        if let Yaml::Array(array) = node.0 {
+                                            let mut sp = array.split(|it| {
+                                                match it {
+                                                    Yaml::String(s) => {
+                                                        if (s == "$self") {
+                                                            true
+                                                        } else { false }
+                                                    },
+                                                    _ => false
+                                                }
+                                            });
+                                            match v {
+                                                Yaml::Array(ar) => {
+                                                    let mut new_array : Vec<Yaml> = sp.next().unwrap().iter().cloned().collect();
+                                                    if let Some(ar2) = sp.next() {
+                                                        new_array.extend(ar.iter().cloned());
+                                                        new_array.extend(ar2.iter().cloned());
+                                                    }
+                                                    *v = Yaml::Array(new_array);
+                                                },
+                                                _ => {}
+                                            }
+                                        }
+                                    },
+                                    _ => { h.insert(newkey, node.0); }
+                                };
+                            }
+                        } else {
+                            h.insert(newkey, node.0);
+                        }
                     }
                 }
                 _ => unreachable!(),
