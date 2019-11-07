@@ -55,6 +55,11 @@ pub enum Yaml {
 pub type Array = Vec<Yaml>;
 pub type Hash = LinkedHashMap<Yaml, Yaml>;
 
+// Callback before value is inserted into hash
+// It returns None if InsertProcessor consumes inserted value
+// and YamlLoader shouldn't insert it.
+pub type InsertProcessor = fn (parent: &mut Yaml, key: &Yaml, value: Yaml) -> Option<Yaml>;
+
 // parse f64 as Core schema
 // See: https://github.com/chyh1990/yaml-rust/issues/51
 fn parse_f64(v: &str) -> Option<f64> {
@@ -73,6 +78,9 @@ pub struct YamlLoader {
     doc_stack: Vec<(Yaml, usize)>,
     key_stack: Vec<Yaml>,
     anchor_map: BTreeMap<usize, Yaml>,
+
+    #[cfg(feature="insert-middleware")]
+    insert_middleware: Vec<InsertProcessor>,
 }
 
 impl MarkedEventReceiver for YamlLoader {
@@ -163,68 +171,63 @@ impl YamlLoader {
         if node.1 > 0 {
             self.anchor_map.insert(node.1, node.0.clone());
         }
+
         if self.doc_stack.is_empty() {
             self.doc_stack.push(node);
-        } else {
-            let parent = self.doc_stack.last_mut().unwrap();
-            match *parent {
-                (Yaml::Array(ref mut v), _) => v.push(node.0),
-                (Yaml::Hash(ref mut h), _) => {
-                    let cur_key = self.key_stack.last_mut().unwrap();
-                    // current node is a key
-                    if cur_key.is_badvalue() {
-                        *cur_key = node.0;
-                    // current node is a value
-                    } else {
-                        let mut newkey = Yaml::BadValue;
-                        mem::swap(&mut newkey, cur_key);
-                        // h.insert(newkey, node.0);
+            return;
+        }
 
-                        if let Yaml::String(ref nk) = newkey {
-                            if (nk == "<<") {
-                                if let Yaml::Hash(hash) = node.0 {
-                                    for (key, val) in hash {
-                                        h.insert(key, val);
-                                    }
-                                }
-                            } else {
-                                match h.get_mut(&newkey) {
-                                    Some(v) => {
-                                        if let Yaml::Array(array) = node.0 {
-                                            let mut sp = array.split(|it| {
-                                                match it {
-                                                    Yaml::String(s) => {
-                                                        if (s == "$self") {
-                                                            true
-                                                        } else { false }
-                                                    },
-                                                    _ => false
-                                                }
-                                            });
-                                            match v {
-                                                Yaml::Array(ar) => {
-                                                    let mut new_array : Vec<Yaml> = sp.next().unwrap().iter().cloned().collect();
-                                                    if let Some(ar2) = sp.next() {
-                                                        new_array.extend(ar.iter().cloned());
-                                                        new_array.extend(ar2.iter().cloned());
-                                                    }
-                                                    *v = Yaml::Array(new_array);
-                                                },
-                                                _ => {}
-                                            }
-                                        }
-                                    },
-                                    _ => { h.insert(newkey, node.0); }
-                                };
-                            }
+        let parent = self.doc_stack.last_mut().unwrap();
+        let is_hash = parent.0.is_hash();
+        let mut opt_node = Some(node.0);
+
+        let cur_key = self.key_stack.last_mut().unwrap();
+        let mut newkey = Yaml::BadValue;
+
+        if is_hash {
+            if cur_key.is_badvalue() {
+                *cur_key = opt_node.unwrap();
+                opt_node = None;
+            } else {
+                mem::swap(&mut newkey, cur_key);
+                #[cfg(feature="insert-middleware")]
+                {
+                    opt_node = self.insert_middleware.iter().fold(opt_node, |acc, ip| {
+                        if let Some(value) = acc {
+                            ip(&mut parent.0, &newkey, value)
                         } else {
-                            h.insert(newkey, node.0);
+                            None
                         }
+                    });
+                }
+            }
+        }
+
+        if let Some(new_node) = opt_node {
+            match parent {
+                (Yaml::Array(ref mut v), _) => v.push(new_node),
+                (Yaml::Hash(ref mut h), _) => {
+                    if !newkey.is_badvalue() {
+                        h.insert(newkey, new_node);
                     }
                 }
                 _ => unreachable!(),
             }
         }
+    }
+
+    #[cfg(feature="insert-middleware")]
+    pub fn load_from_str_hooked(source: &str, insert_middleware: Vec<InsertProcessor>) -> Result<Vec<Yaml>, ScanError> {
+        let mut loader = YamlLoader {
+            docs: Vec::new(),
+            doc_stack: Vec::new(),
+            key_stack: Vec::new(),
+            anchor_map: BTreeMap::new(),
+            insert_middleware,
+        };
+        let mut parser = Parser::new(source.chars());
+        parser.load(&mut loader, true)?;
+        Ok(loader.docs)
     }
 
     pub fn load_from_str(source: &str) -> Result<Vec<Yaml>, ScanError> {
@@ -233,6 +236,9 @@ impl YamlLoader {
             doc_stack: Vec::new(),
             key_stack: Vec::new(),
             anchor_map: BTreeMap::new(),
+
+            #[cfg(feature="insert-middleware")]
+            insert_middleware: Vec::new(),
         };
         let mut parser = Parser::new(source.chars());
         parser.load(&mut loader, true)?;
@@ -304,6 +310,13 @@ impl Yaml {
     pub fn is_array(&self) -> bool {
         match *self {
             Yaml::Array(_) => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_hash(&self) -> bool {
+        match self {
+            Yaml::Hash(_) => true,
             _ => false,
         }
     }

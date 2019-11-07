@@ -55,7 +55,7 @@ pub mod yaml;
 pub use emitter::{EmitError, YamlEmitter};
 pub use parser::Event;
 pub use scanner::ScanError;
-pub use yaml::{Yaml, YamlLoader};
+pub use yaml::{Yaml, YamlLoader, InsertProcessor};
 
 #[cfg(test)]
 mod tests {

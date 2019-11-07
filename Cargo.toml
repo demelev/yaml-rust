@@ -9,6 +9,9 @@ description = "The missing YAML 1.2 parser for rust"
 repository = "https://github.com/chyh1990/yaml-rust"
 readme = "README.md"
 
+[features]
+insert-middleware = []
+
 [dependencies]
 linked-hash-map = ">=0.0.9, <0.6"
 
